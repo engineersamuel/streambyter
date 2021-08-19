@@ -32,6 +32,8 @@
   - [Why](#why)
   - [Install](#install)
   - [Usage](#usage)
+    - [Local Filesystem](#local-filesystem)
+    - [Cloud](#cloud)
   - [Testing](#testing)
   - [Contributing](#contributing)
   - [Publishing](#publishing)
@@ -51,6 +53,8 @@ And this is where `streambyter` comes in.  You can use this library to efficient
 `$ npm i -s streambyter`
 
 ## Usage
+
+### Local Filesystem
 
 In the below example a file path can be provided with a regex with named matching groups to extract those groups out as a dictionary.
 
@@ -110,6 +114,41 @@ const objs = filePaths.map((p) => ({ stream: createReadStream(p, { highWaterMark
 const results = await regexGroupStreamsReader(objs, regex);
 
 console.log(results); // prints [{ path: '/path/to/some1.json', result: { foo: "Hello1", bar: "World1" }}, { path: '/path/to/some2.json', results: { foo: "Hello2", bar: "World2" }}]
+```
+
+### Cloud
+
+When dealing with the cloud, the sdk you are dealing with should have the ability to return a stream.  For example, when using the [Azure Storage SDK](https://github.com/Azure/azure-sdk-for-js/blob/main/sdk/storage/storage-blob/samples/typescript/src/basic.ts#L82) you can obtain a stream to the `blob` via `const stream = await blockBlobClient.download(0);`.   This is efficient since no contents have actually been downloaded, only a stream which can iterate and close as desired.
+
+So let's say we want to list blobs in an Azure Blob Storage container and replicate one of the above examples.
+
+```javascript
+
+async function downloadBlobAsStream(containerClient: ContainerClient, blobName: string): Promise<NodeJS.ReadableStream> {
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+  const downloadBlockBlobResponse = await blockBlobClient.download(0);
+  return downloadBlockBlobResponse.readableStreamBody;
+}
+
+const account = 'someaccountname';
+const sharedKeyCredential = '...';
+
+const client = new BlobServiceClient(`https://${account}.blob.core.windows.net`, sharedKeyCredential);
+const containerClient = client.getContainerClient('somecontainer');
+
+// Let's assume there are a list of files in the root directory of the container
+const blobs = containerClient.listBlobsByHierarchy('/', { prefix: prefix || '' });
+
+const objs = [];
+// Iterate each blob returned and construct an array of objects containing the stream reference for each blob
+for await (const blob of blobs) {
+  objs.push({ name: blob.name, stream: await downloadBlobAsStream(containerClient, blob.name) });
+}
+
+const regex = /"foo":"(?<foo>.*?)","bar":"(?<bar>.*?)"/;
+const results = await regexGroupStreamsReader(objs, regex);
+
+console.log(results); // prints [{ path: 'blob1.json', result: { foo: "Hello1", bar: "World1" }}, { path: 'blob2.json', results: { foo: "Hello2", bar: "World2" }}]
 ```
 
 You'll notice that objects are being passed instead of just the `path` or the `stream` alone, why?  The reason is so you can map back individual results.  For example if you had `await regexGroupPathsReader([{ path: '/path/to/a.txt', path: '/path/to/b.txt'}], regex)` that might result in: `[{ path: '/path/to/a.txt', result: { someMatch: '1' }}, {path: '/path/to/b/txt', result: { someMatch: '2' }}]`
